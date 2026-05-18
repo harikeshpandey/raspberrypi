@@ -1,60 +1,87 @@
 # Raspberry Pi Wi-Fi Station Monitor
 
-This app runs:
+This project is split into:
 
-```bash
-iw dev wlan0 station dump
-```
+- `backend/` - Node.js WebSocket server that runs `iw dev wlan0 station dump`
+- `frontend/` - React + Tailwind frontend with animated UI
 
-on the Raspberry Pi every second and streams the latest output to a browser over WebSocket.
-
-## Project layout
-
-- `server.js` - HTTP server, WebSocket server, and command runner
-- `public/` - browser UI
-
-## Run on Raspberry Pi
-
-1. Install prerequisites:
+## 1. Install prerequisites on Raspberry Pi
 
 ```bash
 sudo apt update
 sudo apt install -y nodejs npm iw
 ```
 
-2. From the project folder:
+## 2. Install app dependencies
 
 ```bash
+cd backend
 npm install
+
+cd ../frontend
+npm install
+```
+
+## 3. Run backend
+
+```bash
+cd backend
 npm start
 ```
 
-3. Open the app from another device on the same network:
+Default backend address:
 
 ```text
-http://<raspberry-pi-ip>:3000
+ws://<raspberry-pi-ip>:3001
+```
+
+## 4. Run frontend
+
+In another terminal:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Then open:
+
+```text
+http://<raspberry-pi-ip>:5173
 ```
 
 ## Configuration
 
-You can change the interface, port, or polling interval:
+Backend:
 
 ```bash
-WIFI_INTERFACE=wlan0 PORT=3000 POLL_INTERVAL_MS=1000 npm start
+WIFI_INTERFACE=wlan0 PORT=3001 POLL_INTERVAL_MS=1000 npm start
 ```
 
-## Notes
-
-- The command must work in the Pi terminal first:
+Frontend:
 
 ```bash
-iw dev wlan0 station dump
+VITE_WS_URL=ws://<raspberry-pi-ip>:3001 npm run dev
 ```
 
-- If your Wi-Fi interface has a different name, check it with:
+If `VITE_WS_URL` is not set, the frontend uses the current browser hostname with port `3001`.
+
+## Useful checks
+
+Check Wi-Fi interfaces:
 
 ```bash
 iw dev
 ```
 
-- If `iw` returns a permission error, run the app with enough privileges for your Pi setup or adjust system permissions appropriately.
+Check the command manually:
+
+```bash
+iw dev wlan0 station dump
+```
+
+Check backend health:
+
+```text
+http://<raspberry-pi-ip>:3001/health
+```
