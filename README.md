@@ -64,6 +64,7 @@ Admin features:
 
 - Block a connected client by MAC using an `iptables` FORWARD drop rule and disconnect it with `iw`.
 - Limit a connected client using `tc htb` and a `flower dst_mac` filter.
+- Limit total Wi-Fi access by setting a maximum number of connected users; extra clients are automatically blocked.
 - Block a domain by writing dnsmasq rules to `/etc/dnsmasq.d/pi-panel-blocklist.conf` and restarting dnsmasq.
 
 Backend options:

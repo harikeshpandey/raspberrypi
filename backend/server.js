@@ -12,8 +12,10 @@ const DNSMASQ_BLOCKLIST = process.env.DNSMASQ_BLOCKLIST || "/etc/dnsmasq.d/pi-pa
 let commandInFlight = false;
 const sessions = new Set();
 const blockedMacs = new Set();
+const autoBlockedMacs = new Set();
 const limitedMacs = new Map();
 const blockedSites = new Set();
+let maxClients = null;
 let lastStationOutput = "Waiting for station data...";
 
 const server = http.createServer((req, res) => {
@@ -124,6 +126,19 @@ function classIdForMac(mac) {
   return Number.parseInt(crypto.createHash("sha1").update(mac).digest("hex").slice(0, 3), 16) + 100;
 }
 
+function parseStationMacs(output) {
+  if (!output || output === "No stations connected.") {
+    return [];
+  }
+
+  return output
+    .split(/^Station /m)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => normalizeMac(block.split(/\s+/)[0]))
+    .filter(isValidMac);
+}
+
 function runCommand(command, args, input) {
   return new Promise((resolve, reject) => {
     const child = execFile(command, args, { timeout: 10000 }, (error, stdout, stderr) => {
@@ -158,6 +173,7 @@ async function blockMac(mac) {
 async function unblockMac(mac) {
   await sudo(["iptables", "-D", "FORWARD", "-m", "mac", "--mac-source", mac, "-j", "DROP"]).catch(() => undefined);
   blockedMacs.delete(mac);
+  autoBlockedMacs.delete(mac);
 }
 
 async function limitMac(mac, kbps) {
@@ -203,11 +219,38 @@ async function unblockSite(site) {
   await writeSiteBlocklist();
 }
 
+async function enforceMaxClients(stationMacs) {
+  if (!Number.isInteger(maxClients)) {
+    for (const mac of Array.from(autoBlockedMacs)) {
+      await unblockMac(mac);
+    }
+    return;
+  }
+
+  const allowed = new Set(stationMacs.slice(0, maxClients));
+  const overLimit = stationMacs.slice(maxClients);
+
+  for (const mac of overLimit) {
+    if (!blockedMacs.has(mac)) {
+      await blockMac(mac);
+      autoBlockedMacs.add(mac);
+    }
+  }
+
+  for (const mac of Array.from(autoBlockedMacs)) {
+    if (allowed.has(mac)) {
+      await unblockMac(mac);
+    }
+  }
+}
+
 function controlState() {
   return {
     blockedMacs: Array.from(blockedMacs),
+    autoBlockedMacs: Array.from(autoBlockedMacs),
     limitedMacs: Object.fromEntries(limitedMacs),
     blockedSites: Array.from(blockedSites).sort(),
+    maxClients,
   };
 }
 
@@ -266,6 +309,21 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.method === "POST" && url.pathname === "/api/access-limit") {
+    const body = await readJson(req);
+    const nextMax = body.maxClients === null || body.maxClients === "" ? null : Number(body.maxClients);
+    if (nextMax !== null && (!Number.isInteger(nextMax) || nextMax < 1 || nextMax > 256)) {
+      sendJson(res, 400, { error: "Maximum clients must be between 1 and 256" });
+      return;
+    }
+
+    maxClients = nextMax;
+    await enforceMaxClients(parseStationMacs(lastStationOutput));
+    sendJson(res, 200, { ok: true, ...controlState() });
+    broadcast({ type: "control_state", timestamp: new Date().toISOString(), ...controlState() });
+    return;
+  }
+
   sendJson(res, 404, { error: "Not found" });
 }
 
@@ -289,14 +347,28 @@ function runStationDump() {
       return;
     }
 
+    const output = stdout.trim() || "No stations connected.";
+    lastStationOutput = output;
+    enforceMaxClients(parseStationMacs(output))
+      .then(() => {
+        broadcast({ type: "control_state", timestamp: new Date().toISOString(), ...controlState() });
+      })
+      .catch((enforceError) => {
+        broadcast({
+          type: "error",
+          timestamp: new Date().toISOString(),
+          interface: INTERFACE,
+          output: enforceError.message,
+        });
+      });
+
     broadcast({
       type: "station_dump",
       timestamp,
       interface: INTERFACE,
-      output: stdout.trim() || "No stations connected.",
+      output,
       controls: controlState(),
     });
-    lastStationOutput = stdout.trim() || "No stations connected.";
   });
 }
 
