@@ -1,6 +1,16 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
-
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  AreaChart,
+  Area,
+} from "recharts";
 const defaultWsUrl = `ws://${window.location.hostname}:3001`;
 const WS_URL = import.meta.env.VITE_WS_URL || defaultWsUrl;
 const API_URL = WS_URL.replace(/^ws/, "http").replace(/\/$/, "");
@@ -31,13 +41,34 @@ function parseStations(output) {
     }
 
     return {
-      mac: mac.toLowerCase(),
-      signal: details.signal || "-",
-      txBitrate: details["tx bitrate"] || "-",
-      rxBitrate: details["rx bitrate"] || "-",
-      connectedTime: details["connected time"] || "-",
-      inactiveTime: details["inactive time"] || "-",
-    };
+  mac: mac.toLowerCase(),
+
+  signal: details.signal || "-",
+
+  txBitrate:
+    parseFloat(details["tx bitrate"]) || 0,
+
+  rxBitrate:
+    parseFloat(details["rx bitrate"]) || 0,
+
+  connectedTime:
+    details["connected time"] || "-",
+
+  inactiveTime:
+    details["inactive time"] || "-",
+
+  txPackets:
+    parseInt(details["tx packets"]) || 0,
+
+  rxPackets:
+    parseInt(details["rx packets"]) || 0,
+
+  txBytes:
+    parseInt(details["tx bytes"]) || 0,
+
+  rxBytes:
+    parseInt(details["rx bytes"]) || 0,
+};
   });
 }
 function MatrixBackground() {
@@ -133,12 +164,28 @@ function App() {
   const [limitInputs, setLimitInputs] = useState({});
   const [busyAction, setBusyAction] = useState("");
   const [actionError, setActionError] = useState("");
-
+  const [deviceHistory, setDeviceHistory] = useState({});
   const stations = useMemo(
     () => parseStations(rawOutput),
     [rawOutput]
   );
+const totalTx = stations.reduce(
+  (sum, s) => sum + s.txBitrate,
+  0
+);
 
+const totalRx = stations.reduce(
+  (sum, s) => sum + s.rxBitrate,
+  0
+);
+
+const totalPackets = stations.reduce(
+  (sum, s) =>
+    sum +
+    (s.txPackets || 0) +
+    (s.rxPackets || 0),
+  0
+);
   const authedFetch = async (path, body = {}) => {
     setActionError("");
 
@@ -265,8 +312,48 @@ function App() {
         }
 
         if (message.output) {
-          setRawOutput(message.output);
-        }
+  setRawOutput(message.output);
+
+  const parsedStations =
+    parseStations(message.output);
+
+  const totalTx = parsedStations.reduce(
+    (sum, s) =>
+      sum + (s.txBitrate || 0),
+    0
+  );
+
+  const totalRx = parsedStations.reduce(
+    (sum, s) =>
+      sum + (s.rxBitrate || 0),
+    0
+  );
+
+  setDeviceHistory((prev) => {
+  const updated = { ...prev };
+
+  parsedStations.forEach((station) => {
+    const mac = station.mac;
+
+    if (!updated[mac]) {
+      updated[mac] = [];
+    }
+
+    updated[mac] = [
+      ...updated[mac].slice(-20),
+      {
+        time: new Date().toLocaleTimeString(),
+
+        tx: station.txBitrate || 0,
+
+        rx: station.rxBitrate || 0,
+      },
+    ];
+  });
+
+  return updated;
+});
+}
 
         if (message.controls) {
           setControls(message.controls);
@@ -443,34 +530,64 @@ backdrop-blur-2xl
           </div>
         </section>
 
-        <section className="mb-6 grid gap-4 md:grid-cols-3">
-          {[
-            ["Interface", interfaceName],
-            ["Connected Stations", stations.length],
-            ["Last Update", updatedAt],
-          ].map(([label, value]) => (
-            <motion.article
-              key={label}
-              layout
-              className="rounded-2xl border border-white/5 bg-zinc-950/70 p-6 shadow-[0_0_40px_rgba(0,0,0,0.6)] backdrop-blur-xl"
-            >
-              <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">
-                {label}
-              </p>
+       <section className="mb-6 grid gap-4 md:grid-cols-5">
+  {[
+    ["Interface", interfaceName],
 
-              <p className="mt-4 text-3xl font-bold text-white">
-                {value}
-              </p>
-            </motion.article>
-          ))}
-        </section>
+    ["Connected Stations", stations.length],
+
+    ["TX Traffic", `${totalTx.toFixed(1)} Mbps`],
+
+    ["RX Traffic", `${totalRx.toFixed(1)} Mbps`],
+
+    ["Packets", totalPackets],
+  ].map(([label, value]) => (
+    <motion.article
+      key={label}
+      layout
+      className="rounded-2xl border border-white/5 bg-zinc-950/70 p-6 shadow-[0_0_40px_rgba(0,0,0,0.6)] backdrop-blur-xl"
+    >
+      <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">
+        {label}
+      </p>
+
+      <p className="mt-4 text-3xl font-bold text-white">
+        {value}
+      </p>
+    </motion.article>
+  ))}
+</section>
 
         {actionError && (
           <div className="mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-5 py-4 text-sm text-red-300">
             {actionError}
           </div>
         )}
+<section className="mb-6 grid gap-5 lg:grid-cols-2">
+  <article className="rounded-3xl border border-white/5 bg-zinc-950/70 p-6 shadow-[0_0_40px_rgba(0,0,0,0.6)] backdrop-blur-xl">
+    <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">
+      Live Analytics
+    </p>
 
+    <h2 className="mt-2 text-2xl font-bold">
+      Network Throughput
+    </h2>
+
+    
+  </article>
+
+  <article className="rounded-3xl border border-white/5 bg-zinc-950/70 p-6 shadow-[0_0_40px_rgba(0,0,0,0.6)] backdrop-blur-xl">
+    <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">
+      Packet Density
+    </p>
+
+    <h2 className="mt-2 text-2xl font-bold">
+      Live Traffic Flow
+    </h2>
+
+    
+  </article>
+</section>
         <section className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
           <article className="overflow-hidden rounded-3xl border border-white/5 bg-zinc-950/70 shadow-[0_0_40px_rgba(0,0,0,0.6)] backdrop-blur-xl">
             <div className="border-b border-white/5 px-6 py-5">
@@ -567,6 +684,56 @@ backdrop-blur-2xl
                             </div>
                           ))}
                         </dl>
+                        <div className="mt-6 h-[180px] rounded-2xl border border-white/5 bg-black/40 p-3">
+  <ResponsiveContainer
+    width="100%"
+    height="100%"
+  >
+    <LineChart
+      data={deviceHistory[station.mac] || []}
+    >
+      <CartesianGrid
+        stroke="#222"
+        strokeDasharray="3 3"
+      />
+
+      <XAxis
+        dataKey="time"
+        stroke="#555"
+        hide
+      />
+
+      <YAxis
+        stroke="#555"
+        width={30}
+      />
+
+      <Tooltip
+        contentStyle={{
+          background: "#050505",
+          border: "1px solid #222",
+          borderRadius: "12px",
+        }}
+      />
+
+      <Line
+        type="monotone"
+        dataKey="tx"
+        stroke="#00ff9d"
+        strokeWidth={2}
+        dot={false}
+      />
+
+      <Line
+        type="monotone"
+        dataKey="rx"
+        stroke="#00bfff"
+        strokeWidth={2}
+        dot={false}
+      />
+    </LineChart>
+  </ResponsiveContainer>
+</div>
 
                         <div className="mt-5 flex flex-col gap-4 border-t border-white/5 pt-5 xl:flex-row xl:items-center xl:justify-between">
                           <div className="flex flex-wrap gap-2">
