@@ -200,15 +200,28 @@ async function clearLimitMac(mac) {
 function siteBlockConfig() {
   return Array.from(blockedSites)
     .sort()
-    .map((site) => `address=/${site}/0.0.0.0\naddress=/${site}/::`)
+    .flatMap((site) => {
+      const clean = site.replace(/^https?:\/\//, "").replace(/\/$/, "");
+
+      return [
+        `address=/${clean}/0.0.0.0`,
+        `address=/.${clean}/0.0.0.0`,
+        `address=/${clean}/::`,
+        `address=/.${clean}/::`,
+      ];
+    })
     .join("\n");
 }
 
 async function writeSiteBlocklist() {
-  await sudo(["tee", DNSMASQ_BLOCKLIST], siteBlockConfig() + "\n");
+  const config = siteBlockConfig() + "\n";
+
+  console.log(config);
+
+  await sudo(["tee", DNSMASQ_BLOCKLIST], config);
+
   await sudo(["systemctl", "restart", "dnsmasq"]);
 }
-
 async function blockSite(site) {
   blockedSites.add(site);
   await writeSiteBlocklist();
