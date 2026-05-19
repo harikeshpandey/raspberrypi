@@ -1,16 +1,18 @@
-# Raspberry Pi Wi-Fi Station Monitor
+# Raspberry Pi Wi-Fi Admin Panel
 
 This project is split into:
 
-- `backend/` - Node.js WebSocket server that runs `iw dev wlan0 station dump`
-- `frontend/` - React + Tailwind frontend with animated UI
+- `backend/` - Node.js HTTP/WebSocket server that runs Wi-Fi monitor and admin commands
+- `frontend/` - React + Tailwind frontend with login, station controls, and site blocking
 
 ## 1. Install prerequisites on Raspberry Pi
 
 ```bash
 sudo apt update
-sudo apt install -y nodejs npm iw
+sudo apt install -y nodejs npm iw iptables iproute2 dnsmasq
 ```
+
+The backend executes admin actions with `sudo`. For unattended use, allow the command set your panel needs in sudoers, for example `iptables`, `iw`, `tc`, `tee`, and `systemctl restart dnsmasq`.
 
 ## 2. Install app dependencies
 
@@ -26,7 +28,7 @@ npm install
 
 ```bash
 cd backend
-npm start
+ADMIN_PASSWORD='your-password' npm start
 ```
 
 Default backend address:
@@ -55,7 +57,21 @@ http://<raspberry-pi-ip>:5173
 Backend:
 
 ```bash
-WIFI_INTERFACE=wlan0 PORT=3001 POLL_INTERVAL_MS=1000 npm start
+ADMIN_PASSWORD='your-password' WIFI_INTERFACE=wlan0 PORT=3001 POLL_INTERVAL_MS=1000 npm start
+```
+
+Admin features:
+
+- Block a connected client by MAC using an `iptables` FORWARD drop rule and disconnect it with `iw`.
+- Limit a connected client using `tc htb` and a `flower dst_mac` filter.
+- Block a domain by writing dnsmasq rules to `/etc/dnsmasq.d/pi-panel-blocklist.conf` and restarting dnsmasq.
+
+Backend options:
+
+```bash
+ADMIN_PASSWORD=your-password
+SUDO_PATH=sudo
+DNSMASQ_BLOCKLIST=/etc/dnsmasq.d/pi-panel-blocklist.conf
 ```
 
 Frontend:
