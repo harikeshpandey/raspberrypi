@@ -28,24 +28,58 @@ let lastStationOutput = "Waiting for station data...";
 const DOH_IPS = [
   "1.1.1.1",
   "1.0.0.1",
+
   "8.8.8.8",
   "8.8.4.4",
+
   "9.9.9.9",
+  "149.112.112.112",
+
+  "94.140.14.14",
+  "94.140.15.15",
+
+  "76.76.2.0",
+  "76.76.10.0",
+
+  "208.67.222.222",
+  "208.67.220.220",
 ];
 
 const RELATED_DOMAINS = {
   "youtube.com": [
-   "youtube.com",
+  "youtube.com",
   "www.youtube.com",
   "m.youtube.com",
+  "music.youtube.com",
   "youtu.be",
+
   "ytimg.com",
+  "i.ytimg.com",
+  "s.ytimg.com",
+
   "googlevideo.com",
+
   "youtubei.googleapis.com",
   "youtube.googleapis.com",
   "youtube-ui.l.google.com",
-  "i.ytimg.com",
-  ],
+
+  "yt3.ggpht.com",
+  "yt4.ggpht.com",
+
+  "ggpht.com",
+  "gvt1.com",
+
+  "android.clients.google.com",
+  "clients3.google.com",
+  "clients6.google.com",
+
+  "googleapis.com",
+
+  "dns.google",
+  "chrome.cloudflare-dns.com",
+  "mozilla.cloudflare-dns.com",
+  "cloudflare-dns.com",
+],
 
   "instagram.com": [
     "instagram.com",
@@ -458,21 +492,27 @@ function siteBlockConfig() {
         .replace(/^www\./, "")
         .replace(/\/$/, "");
 
-      const root = clean
-        .split(".")
-        .slice(-2)
-        .join(".");
-
       lines.push(
-        `address=/${root}/0.0.0.0`,
-        `address=/.${root}/0.0.0.0`,
-        `address=/${root}/::`,
-        `address=/.${root}/::`
+        `address=/${clean}/#`,
+        `address=/.${clean}/#`
       );
     }
   }
 
   return [...new Set(lines)].join("\n");
+}
+async function disableIPv6() {
+  await sudo([
+    "sysctl",
+    "-w",
+    "net.ipv6.conf.all.disable_ipv6=1",
+  ]);
+
+  await sudo([
+    "sysctl",
+    "-w",
+    "net.ipv6.conf.default.disable_ipv6=1",
+  ]);
 }
 async function disconnectClients() {
   const macs = parseStationMacs(
@@ -596,6 +636,54 @@ async function enforceLocalDNS() {
       "REDIRECT",
       "--to-ports",
       "53",
+    ]);
+  });
+
+  await sudo([
+    "iptables",
+    "-C",
+    "FORWARD",
+    "-p",
+    "udp",
+    "--dport",
+    "53",
+    "-j",
+    "DROP",
+  ]).catch(async () => {
+    await sudo([
+      "iptables",
+      "-A",
+      "FORWARD",
+      "-p",
+      "udp",
+      "--dport",
+      "53",
+      "-j",
+      "DROP",
+    ]);
+  });
+
+  await sudo([
+    "iptables",
+    "-C",
+    "FORWARD",
+    "-p",
+    "tcp",
+    "--dport",
+    "53",
+    "-j",
+    "DROP",
+  ]).catch(async () => {
+    await sudo([
+      "iptables",
+      "-A",
+      "FORWARD",
+      "-p",
+      "tcp",
+      "--dport",
+      "53",
+      "-j",
+      "DROP",
     ]);
   });
 }
@@ -1006,6 +1094,7 @@ server.listen(
     );
 
     try {
+      await disableIPv6();
       await enforceLocalDNS();
 
       await blockDoH();
