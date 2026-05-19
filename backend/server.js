@@ -7,16 +7,65 @@ const PORT = Number(process.env.PORT || 3001);
 const INTERFACE = process.env.WIFI_INTERFACE || "wlan0";
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 1000);
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin";
+
 const SUDO = process.env.SUDO_PATH || "sudo";
-const DNSMASQ_BLOCKLIST = process.env.DNSMASQ_BLOCKLIST || "/etc/dnsmasq.d/pi-panel-blocklist.conf";
+
+const DNSMASQ_BLOCKLIST =
+  process.env.DNSMASQ_BLOCKLIST ||
+  "/etc/dnsmasq.d/pi-panel-blocklist.conf";
+
 let commandInFlight = false;
+
 const sessions = new Set();
 const blockedMacs = new Set();
 const autoBlockedMacs = new Set();
 const limitedMacs = new Map();
 const blockedSites = new Set();
+
 let maxClients = null;
 let lastStationOutput = "Waiting for station data...";
+
+const DOH_IPS = [
+  "1.1.1.1",
+  "1.0.0.1",
+  "8.8.8.8",
+  "8.8.4.4",
+  "9.9.9.9",
+];
+
+const RELATED_DOMAINS = {
+  "youtube.com": [
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "youtubei.googleapis.com",
+    "ytimg.com",
+    "googlevideo.com",
+    "youtu.be",
+  ],
+
+  "instagram.com": [
+    "instagram.com",
+    "cdninstagram.com",
+  ],
+
+  "facebook.com": [
+    "facebook.com",
+    "fbcdn.net",
+    "messenger.com",
+  ],
+
+  "whatsapp.com": [
+    "whatsapp.com",
+    "whatsapp.net",
+  ],
+
+  "tiktok.com": [
+    "tiktok.com",
+    "tiktokcdn.com",
+    "byteoversea.com",
+  ],
+};
 
 const server = http.createServer((req, res) => {
   setCors(res);
@@ -33,7 +82,11 @@ const server = http.createServer((req, res) => {
   }
 
   handleApi(req, res).catch((error) => {
-    sendJson(res, 500, { error: error.message || "Server error" });
+    console.error(error);
+
+    sendJson(res, 500, {
+      error: error.message || "Server error",
+    });
   });
 });
 
@@ -41,6 +94,7 @@ const wss = new WebSocket.Server({ server });
 
 function broadcast(payload) {
   const message = JSON.stringify(payload);
+
   for (const client of wss.clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message);
@@ -50,25 +104,38 @@ function broadcast(payload) {
 
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,OPTIONS"
+  );
+
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type,Authorization"
+  );
 }
 
 function sendJson(res, status, payload) {
-  res.writeHead(status, { "Content-Type": "application/json" });
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+  });
+
   res.end(JSON.stringify(payload));
 }
 
 function readJson(req) {
   return new Promise((resolve, reject) => {
     let body = "";
+
     req.on("data", (chunk) => {
       body += chunk;
+
       if (body.length > 1024 * 1024) {
         req.destroy();
         reject(new Error("Request body too large"));
       }
     });
+
     req.on("end", () => {
       if (!body) {
         resolve({});
@@ -86,13 +153,20 @@ function readJson(req) {
 
 function getToken(req) {
   const header = req.headers.authorization || "";
-  return header.startsWith("Bearer ") ? header.slice(7) : "";
+
+  return header.startsWith("Bearer ")
+    ? header.slice(7)
+    : "";
 }
 
 function requireAdmin(req, res) {
   const token = getToken(req);
+
   if (!token || !sessions.has(token)) {
-    sendJson(res, 401, { error: "Admin login required" });
+    sendJson(res, 401, {
+      error: "Admin login required",
+    });
+
     return false;
   }
 
@@ -104,30 +178,53 @@ function isValidMac(mac) {
 }
 
 function normalizeMac(mac) {
-  return String(mac || "").trim().toLowerCase();
+  return String(mac || "")
+    .trim()
+    .toLowerCase();
 }
 
 function normalizeSite(site) {
-  const value = String(site || "")
+  let value = String(site || "")
     .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .split("/")[0]
-    .replace(/^\*\./, "");
+    .toLowerCase();
 
-  if (!/^(?!-)([a-z0-9-]{1,63}\.)+[a-z]{2,63}$/i.test(value)) {
-    throw new Error("Enter a valid domain, for example youtube.com");
+  value = value
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split("/")[0]
+    .split("?")[0]
+    .split("#")[0]
+    .replace(/:\d+$/, "");
+
+  if (
+    !/^(?!-)([a-z0-9-]{1,63}\.)+[a-z]{2,63}$/i.test(value)
+  ) {
+    throw new Error(
+      "Enter valid domain like youtube.com"
+    );
   }
 
   return value;
 }
 
 function classIdForMac(mac) {
-  return Number.parseInt(crypto.createHash("sha1").update(mac).digest("hex").slice(0, 3), 16) + 100;
+  return (
+    Number.parseInt(
+      crypto
+        .createHash("sha1")
+        .update(mac)
+        .digest("hex")
+        .slice(0, 3),
+      16
+    ) + 100
+  );
 }
 
 function parseStationMacs(output) {
-  if (!output || output === "No stations connected.") {
+  if (
+    !output ||
+    output === "No stations connected."
+  ) {
     return [];
   }
 
@@ -135,21 +232,35 @@ function parseStationMacs(output) {
     .split(/^Station /m)
     .map((block) => block.trim())
     .filter(Boolean)
-    .map((block) => normalizeMac(block.split(/\s+/)[0]))
+    .map((block) =>
+      normalizeMac(block.split(/\s+/)[0])
+    )
     .filter(isValidMac);
 }
 
 function runCommand(command, args, input) {
   return new Promise((resolve, reject) => {
-    const child = execFile(command, args, { timeout: 10000 }, (error, stdout, stderr) => {
-      const output = [stdout, stderr].filter(Boolean).join("\n").trim();
-      if (error) {
-        reject(new Error(output || error.message));
-        return;
-      }
+    const child = execFile(
+      command,
+      args,
+      { timeout: 10000 },
+      (error, stdout, stderr) => {
+        const output = [stdout, stderr]
+          .filter(Boolean)
+          .join("\n")
+          .trim();
 
-      resolve(output);
-    });
+        if (error) {
+          reject(
+            new Error(output || error.message)
+          );
+
+          return;
+        }
+
+        resolve(output);
+      }
+    );
 
     if (input !== undefined) {
       child.stdin.end(input);
@@ -162,86 +273,369 @@ async function sudo(args, input) {
 }
 
 async function blockMac(mac) {
-  await sudo(["iptables", "-C", "FORWARD", "-m", "mac", "--mac-source", mac, "-j", "DROP"]).catch(async () => {
-    await sudo(["iptables", "-I", "FORWARD", "1", "-m", "mac", "--mac-source", mac, "-j", "DROP"]);
+  await sudo([
+    "iptables",
+    "-C",
+    "FORWARD",
+    "-m",
+    "mac",
+    "--mac-source",
+    mac,
+    "-j",
+    "DROP",
+  ]).catch(async () => {
+    await sudo([
+      "iptables",
+      "-I",
+      "FORWARD",
+      "1",
+      "-m",
+      "mac",
+      "--mac-source",
+      mac,
+      "-j",
+      "DROP",
+    ]);
   });
 
-  await sudo(["iw", "dev", INTERFACE, "station", "del", mac]).catch(() => undefined);
+  await sudo([
+    "iw",
+    "dev",
+    INTERFACE,
+    "station",
+    "del",
+    mac,
+  ]).catch(() => undefined);
+
   blockedMacs.add(mac);
 }
 
 async function unblockMac(mac) {
-  await sudo(["iptables", "-D", "FORWARD", "-m", "mac", "--mac-source", mac, "-j", "DROP"]).catch(() => undefined);
+  await sudo([
+    "iptables",
+    "-D",
+    "FORWARD",
+    "-m",
+    "mac",
+    "--mac-source",
+    mac,
+    "-j",
+    "DROP",
+  ]).catch(() => undefined);
+
   blockedMacs.delete(mac);
   autoBlockedMacs.delete(mac);
 }
 
 async function limitMac(mac, kbps) {
   const rate = Number(kbps);
-  if (!Number.isInteger(rate) || rate < 32 || rate > 1000000) {
-    throw new Error("Limit must be between 32 and 1000000 Kbps");
+
+  if (
+    !Number.isInteger(rate) ||
+    rate < 32 ||
+    rate > 1000000
+  ) {
+    throw new Error(
+      "Limit must be between 32 and 1000000 Kbps"
+    );
   }
 
   const id = classIdForMac(mac);
-  await sudo(["tc", "qdisc", "replace", "dev", INTERFACE, "root", "handle", "1:", "htb", "default", "999"]);
-  await sudo(["tc", "class", "replace", "dev", INTERFACE, "parent", "1:", "classid", "1:999", "htb", "rate", "1000mbit", "ceil", "1000mbit"]).catch(() => undefined);
-  await sudo(["tc", "class", "replace", "dev", INTERFACE, "parent", "1:", "classid", `1:${id}`, "htb", "rate", `${rate}kbit`, "ceil", `${rate}kbit`]);
-  await sudo(["tc", "filter", "replace", "dev", INTERFACE, "protocol", "ip", "parent", "1:", "pref", String(id), "flower", "dst_mac", mac, "classid", `1:${id}`]);
+
+  await sudo([
+    "tc",
+    "qdisc",
+    "replace",
+    "dev",
+    INTERFACE,
+    "root",
+    "handle",
+    "1:",
+    "htb",
+    "default",
+    "999",
+  ]);
+
+  await sudo([
+    "tc",
+    "class",
+    "replace",
+    "dev",
+    INTERFACE,
+    "parent",
+    "1:",
+    "classid",
+    "1:999",
+    "htb",
+    "rate",
+    "1000mbit",
+    "ceil",
+    "1000mbit",
+  ]).catch(() => undefined);
+
+  await sudo([
+    "tc",
+    "class",
+    "replace",
+    "dev",
+    INTERFACE,
+    "parent",
+    "1:",
+    "classid",
+    `1:${id}`,
+    "htb",
+    "rate",
+    `${rate}kbit`,
+    "ceil",
+    `${rate}kbit`,
+  ]);
+
+  await sudo([
+    "tc",
+    "filter",
+    "replace",
+    "dev",
+    INTERFACE,
+    "protocol",
+    "ip",
+    "parent",
+    "1:",
+    "pref",
+    String(id),
+    "flower",
+    "dst_mac",
+    mac,
+    "classid",
+    `1:${id}`,
+  ]);
+
   limitedMacs.set(mac, rate);
 }
 
 async function clearLimitMac(mac) {
   const id = classIdForMac(mac);
-  await sudo(["tc", "filter", "del", "dev", INTERFACE, "protocol", "ip", "parent", "1:", "pref", String(id)]).catch(() => undefined);
-  await sudo(["tc", "class", "del", "dev", INTERFACE, "classid", `1:${id}`]).catch(() => undefined);
+
+  await sudo([
+    "tc",
+    "filter",
+    "del",
+    "dev",
+    INTERFACE,
+    "protocol",
+    "ip",
+    "parent",
+    "1:",
+    "pref",
+    String(id),
+  ]).catch(() => undefined);
+
+  await sudo([
+    "tc",
+    "class",
+    "del",
+    "dev",
+    INTERFACE,
+    "classid",
+    `1:${id}`,
+  ]).catch(() => undefined);
+
   limitedMacs.delete(mac);
 }
 
 function siteBlockConfig() {
-  return Array.from(blockedSites)
-    .sort()
-    .flatMap((site) => {
-      const clean = site.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const lines = [];
 
-      return [
+  for (const site of Array.from(blockedSites).sort()) {
+    const domains =
+      RELATED_DOMAINS[site] || [site];
+
+    for (const domain of domains) {
+      const clean = domain.replace(
+        /^www\./,
+        ""
+      );
+
+      lines.push(
         `address=/${clean}/0.0.0.0`,
         `address=/.${clean}/0.0.0.0`,
         `address=/${clean}/::`,
-        `address=/.${clean}/::`,
-      ];
-    })
-    .join("\n");
+        `address=/.${clean}/::`
+      );
+    }
+  }
+
+  return lines.join("\n");
+}
+
+async function disconnectClients() {
+  const macs = parseStationMacs(
+    lastStationOutput
+  );
+
+  for (const mac of macs) {
+    await sudo([
+      "iw",
+      "dev",
+      INTERFACE,
+      "station",
+      "del",
+      mac,
+    ]).catch(() => undefined);
+  }
 }
 
 async function writeSiteBlocklist() {
-  const config = siteBlockConfig() + "\n";
+  const config =
+    siteBlockConfig() + "\n";
 
   console.log(config);
 
-  await sudo(["tee", DNSMASQ_BLOCKLIST], config);
+  await sudo(
+    ["tee", DNSMASQ_BLOCKLIST],
+    config
+  );
 
-  await sudo(["systemctl", "restart", "dnsmasq"]);
+  await sudo(["dnsmasq", "--test"]);
+
+  await sudo([
+    "systemctl",
+    "restart",
+    "dnsmasq",
+  ]);
+
+  await sudo([
+    "systemd-resolve",
+    "--flush-caches",
+  ]).catch(() => undefined);
 }
+
 async function blockSite(site) {
+  console.log("Blocking:", site);
+
   blockedSites.add(site);
+
   await writeSiteBlocklist();
+
+  await disconnectClients();
 }
 
 async function unblockSite(site) {
   blockedSites.delete(site);
+
   await writeSiteBlocklist();
+
+  await disconnectClients();
 }
 
-async function enforceMaxClients(stationMacs) {
+async function enforceLocalDNS() {
+  await sudo([
+    "iptables",
+    "-t",
+    "nat",
+    "-C",
+    "PREROUTING",
+    "-p",
+    "udp",
+    "--dport",
+    "53",
+    "-j",
+    "REDIRECT",
+    "--to-ports",
+    "53",
+  ]).catch(async () => {
+    await sudo([
+      "iptables",
+      "-t",
+      "nat",
+      "-A",
+      "PREROUTING",
+      "-p",
+      "udp",
+      "--dport",
+      "53",
+      "-j",
+      "REDIRECT",
+      "--to-ports",
+      "53",
+    ]);
+  });
+
+  await sudo([
+    "iptables",
+    "-t",
+    "nat",
+    "-C",
+    "PREROUTING",
+    "-p",
+    "tcp",
+    "--dport",
+    "53",
+    "-j",
+    "REDIRECT",
+    "--to-ports",
+    "53",
+  ]).catch(async () => {
+    await sudo([
+      "iptables",
+      "-t",
+      "nat",
+      "-A",
+      "PREROUTING",
+      "-p",
+      "tcp",
+      "--dport",
+      "53",
+      "-j",
+      "REDIRECT",
+      "--to-ports",
+      "53",
+    ]);
+  });
+}
+
+async function blockDoH() {
+  for (const ip of DOH_IPS) {
+    await sudo([
+      "iptables",
+      "-C",
+      "FORWARD",
+      "-d",
+      ip,
+      "-j",
+      "DROP",
+    ]).catch(async () => {
+      await sudo([
+        "iptables",
+        "-A",
+        "FORWARD",
+        "-d",
+        ip,
+        "-j",
+        "DROP",
+      ]);
+    });
+  }
+}
+
+async function enforceMaxClients(
+  stationMacs
+) {
   if (!Number.isInteger(maxClients)) {
-    for (const mac of Array.from(autoBlockedMacs)) {
+    for (const mac of Array.from(
+      autoBlockedMacs
+    )) {
       await unblockMac(mac);
     }
+
     return;
   }
 
-  const allowed = new Set(stationMacs.slice(0, maxClients));
-  const overLimit = stationMacs.slice(maxClients);
+  const allowed = new Set(
+    stationMacs.slice(0, maxClients)
+  );
+
+  const overLimit =
+    stationMacs.slice(maxClients);
 
   for (const mac of overLimit) {
     if (!blockedMacs.has(mac)) {
@@ -250,7 +644,9 @@ async function enforceMaxClients(stationMacs) {
     }
   }
 
-  for (const mac of Array.from(autoBlockedMacs)) {
+  for (const mac of Array.from(
+    autoBlockedMacs
+  )) {
     if (allowed.has(mac)) {
       await unblockMac(mac);
     }
@@ -260,84 +656,217 @@ async function enforceMaxClients(stationMacs) {
 function controlState() {
   return {
     blockedMacs: Array.from(blockedMacs),
-    autoBlockedMacs: Array.from(autoBlockedMacs),
-    limitedMacs: Object.fromEntries(limitedMacs),
-    blockedSites: Array.from(blockedSites).sort(),
+    autoBlockedMacs: Array.from(
+      autoBlockedMacs
+    ),
+    limitedMacs: Object.fromEntries(
+      limitedMacs
+    ),
+    blockedSites: Array.from(
+      blockedSites
+    ).sort(),
     maxClients,
   };
 }
 
 async function handleApi(req, res) {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  const url = new URL(
+    req.url,
+    `http://${req.headers.host}`
+  );
 
-  if (req.method === "POST" && url.pathname === "/api/login") {
+  if (
+    req.method === "POST" &&
+    url.pathname === "/api/login"
+  ) {
     const body = await readJson(req);
-    if (body.password !== ADMIN_PASSWORD) {
-      sendJson(res, 401, { error: "Wrong admin password" });
+
+    if (
+      body.password !== ADMIN_PASSWORD
+    ) {
+      sendJson(res, 401, {
+        error: "Wrong admin password",
+      });
+
       return;
     }
 
-    const token = crypto.randomBytes(24).toString("hex");
+    const token = crypto
+      .randomBytes(24)
+      .toString("hex");
+
     sessions.add(token);
+
     sendJson(res, 200, { token });
+
     return;
   }
 
   if (url.pathname === "/api/state") {
-    if (!requireAdmin(req, res)) return;
-    sendJson(res, 200, { ...controlState(), interface: INTERFACE });
+    if (!requireAdmin(req, res))
+      return;
+
+    sendJson(res, 200, {
+      ...controlState(),
+      interface: INTERFACE,
+    });
+
     return;
   }
 
-  if (!requireAdmin(req, res)) return;
+  if (!requireAdmin(req, res))
+    return;
 
-  const macMatch = url.pathname.match(/^\/api\/clients\/([^/]+)\/(block|unblock|limit|clear-limit)$/);
-  if (req.method === "POST" && macMatch) {
-    const mac = normalizeMac(decodeURIComponent(macMatch[1]));
+  const macMatch =
+    url.pathname.match(
+      /^\/api\/clients\/([^/]+)\/(block|unblock|limit|clear-limit)$/
+    );
+
+  if (
+    req.method === "POST" &&
+    macMatch
+  ) {
+    const mac = normalizeMac(
+      decodeURIComponent(macMatch[1])
+    );
+
     if (!isValidMac(mac)) {
-      sendJson(res, 400, { error: "Invalid MAC address" });
+      sendJson(res, 400, {
+        error: "Invalid MAC address",
+      });
+
       return;
     }
 
     const action = macMatch[2];
     const body = await readJson(req);
-    if (action === "block") await blockMac(mac);
-    if (action === "unblock") await unblockMac(mac);
-    if (action === "limit") await limitMac(mac, body.kbps);
-    if (action === "clear-limit") await clearLimitMac(mac);
 
-    sendJson(res, 200, { ok: true, ...controlState() });
-    broadcast({ type: "control_state", timestamp: new Date().toISOString(), ...controlState() });
+    if (action === "block")
+      await blockMac(mac);
+
+    if (action === "unblock")
+      await unblockMac(mac);
+
+    if (action === "limit")
+      await limitMac(mac, body.kbps);
+
+    if (action === "clear-limit")
+      await clearLimitMac(mac);
+
+    sendJson(res, 200, {
+      ok: true,
+      ...controlState(),
+    });
+
+    broadcast({
+      type: "control_state",
+      timestamp:
+        new Date().toISOString(),
+      ...controlState(),
+    });
+
     return;
   }
 
-  if (req.method === "POST" && (url.pathname === "/api/sites/block" || url.pathname === "/api/sites/unblock")) {
+  if (
+    req.method === "POST" &&
+    (
+      url.pathname ===
+        "/api/sites/block" ||
+      url.pathname ===
+        "/api/sites/unblock"
+    )
+  ) {
     const body = await readJson(req);
-    const site = normalizeSite(body.site);
-    if (url.pathname.endsWith("/block")) await blockSite(site);
-    if (url.pathname.endsWith("/unblock")) await unblockSite(site);
 
-    sendJson(res, 200, { ok: true, ...controlState() });
-    broadcast({ type: "control_state", timestamp: new Date().toISOString(), ...controlState() });
+    const site = normalizeSite(
+      body.site
+    );
+
+    if (
+      url.pathname.endsWith("/block")
+    ) {
+      await blockSite(site);
+    }
+
+    if (
+      url.pathname.endsWith(
+        "/unblock"
+      )
+    ) {
+      await unblockSite(site);
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      ...controlState(),
+    });
+
+    broadcast({
+      type: "control_state",
+      timestamp:
+        new Date().toISOString(),
+      ...controlState(),
+    });
+
     return;
   }
 
-  if (req.method === "POST" && url.pathname === "/api/access-limit") {
+  if (
+    req.method === "POST" &&
+    url.pathname ===
+      "/api/access-limit"
+  ) {
     const body = await readJson(req);
-    const nextMax = body.maxClients === null || body.maxClients === "" ? null : Number(body.maxClients);
-    if (nextMax !== null && (!Number.isInteger(nextMax) || nextMax < 1 || nextMax > 256)) {
-      sendJson(res, 400, { error: "Maximum clients must be between 1 and 256" });
+
+    const nextMax =
+      body.maxClients === null ||
+      body.maxClients === ""
+        ? null
+        : Number(body.maxClients);
+
+    if (
+      nextMax !== null &&
+      (
+        !Number.isInteger(nextMax) ||
+        nextMax < 1 ||
+        nextMax > 256
+      )
+    ) {
+      sendJson(res, 400, {
+        error:
+          "Maximum clients must be between 1 and 256",
+      });
+
       return;
     }
 
     maxClients = nextMax;
-    await enforceMaxClients(parseStationMacs(lastStationOutput));
-    sendJson(res, 200, { ok: true, ...controlState() });
-    broadcast({ type: "control_state", timestamp: new Date().toISOString(), ...controlState() });
+
+    await enforceMaxClients(
+      parseStationMacs(
+        lastStationOutput
+      )
+    );
+
+    sendJson(res, 200, {
+      ok: true,
+      ...controlState(),
+    });
+
+    broadcast({
+      type: "control_state",
+      timestamp:
+        new Date().toISOString(),
+      ...controlState(),
+    });
+
     return;
   }
 
-  sendJson(res, 404, { error: "Not found" });
+  sendJson(res, 404, {
+    error: "Not found",
+  });
 }
 
 function runStationDump() {
@@ -346,52 +875,83 @@ function runStationDump() {
   }
 
   commandInFlight = true;
-  execFile("iw", ["dev", INTERFACE, "station", "dump"], { timeout: 5000 }, (error, stdout, stderr) => {
-    const timestamp = new Date().toISOString();
-    commandInFlight = false;
 
-    if (error) {
-      broadcast({
-        type: "error",
-        timestamp,
-        interface: INTERFACE,
-        output: stderr?.trim() || error.message,
-      });
-      return;
-    }
+  execFile(
+    "iw",
+    [
+      "dev",
+      INTERFACE,
+      "station",
+      "dump",
+    ],
+    { timeout: 5000 },
+    (error, stdout, stderr) => {
+      const timestamp =
+        new Date().toISOString();
 
-    const output = stdout.trim() || "No stations connected.";
-    lastStationOutput = output;
-    enforceMaxClients(parseStationMacs(output))
-      .then(() => {
-        broadcast({ type: "control_state", timestamp: new Date().toISOString(), ...controlState() });
-      })
-      .catch((enforceError) => {
+      commandInFlight = false;
+
+      if (error) {
         broadcast({
           type: "error",
-          timestamp: new Date().toISOString(),
+          timestamp,
           interface: INTERFACE,
-          output: enforceError.message,
+          output:
+            stderr?.trim() ||
+            error.message,
         });
-      });
 
-    broadcast({
-      type: "station_dump",
-      timestamp,
-      interface: INTERFACE,
-      output,
-      controls: controlState(),
-    });
-  });
+        return;
+      }
+
+      const output =
+        stdout.trim() ||
+        "No stations connected.";
+
+      lastStationOutput = output;
+
+      enforceMaxClients(
+        parseStationMacs(output)
+      )
+        .then(() => {
+          broadcast({
+            type: "control_state",
+            timestamp:
+              new Date().toISOString(),
+            ...controlState(),
+          });
+        })
+        .catch((enforceError) => {
+          broadcast({
+            type: "error",
+            timestamp:
+              new Date().toISOString(),
+            interface: INTERFACE,
+            output:
+              enforceError.message,
+          });
+        });
+
+      broadcast({
+        type: "station_dump",
+        timestamp,
+        interface: INTERFACE,
+        output,
+        controls: controlState(),
+      });
+    }
+  );
 }
 
 wss.on("connection", (socket) => {
   socket.send(
     JSON.stringify({
       type: "connected",
-      timestamp: new Date().toISOString(),
+      timestamp:
+        new Date().toISOString(),
       interface: INTERFACE,
-      pollIntervalMs: POLL_INTERVAL_MS,
+      pollIntervalMs:
+        POLL_INTERVAL_MS,
       output: lastStationOutput,
       controls: controlState(),
     })
@@ -400,9 +960,36 @@ wss.on("connection", (socket) => {
   runStationDump();
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Backend listening on ws://0.0.0.0:${PORT}`);
-  console.log(`Streaming: iw dev ${INTERFACE} station dump`);
-});
+server.listen(
+  PORT,
+  "0.0.0.0",
+  async () => {
+    console.log(
+      `Backend listening on ws://0.0.0.0:${PORT}`
+    );
 
-setInterval(runStationDump, POLL_INTERVAL_MS);
+    console.log(
+      `Streaming: iw dev ${INTERFACE} station dump`
+    );
+
+    try {
+      await enforceLocalDNS();
+
+      await blockDoH();
+
+      console.log(
+        "DNS enforcement enabled"
+      );
+    } catch (error) {
+      console.error(
+        "Startup firewall error:",
+        error.message
+      );
+    }
+  }
+);
+
+setInterval(
+  runStationDump,
+  POLL_INTERVAL_MS
+);
