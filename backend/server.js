@@ -35,13 +35,16 @@ const DOH_IPS = [
 
 const RELATED_DOMAINS = {
   "youtube.com": [
-    "youtube.com",
-    "www.youtube.com",
-    "m.youtube.com",
-    "youtubei.googleapis.com",
-    "ytimg.com",
-    "googlevideo.com",
-    "youtu.be",
+   "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "youtu.be",
+  "ytimg.com",
+  "googlevideo.com",
+  "youtubei.googleapis.com",
+  "youtube.googleapis.com",
+  "youtube-ui.l.google.com",
+  "i.ytimg.com",
   ],
 
   "instagram.com": [
@@ -446,27 +449,31 @@ function siteBlockConfig() {
   const lines = [];
 
   for (const site of Array.from(blockedSites).sort()) {
-    const domains =
+    const related =
       RELATED_DOMAINS[site] || [site];
 
-    for (const domain of domains) {
-      const clean = domain.replace(
-        /^www\./,
-        ""
-      );
+    for (const domain of related) {
+      const clean = domain
+        .replace(/^https?:\/\//, "")
+        .replace(/^www\./, "")
+        .replace(/\/$/, "");
+
+      const root = clean
+        .split(".")
+        .slice(-2)
+        .join(".");
 
       lines.push(
-        `address=/${clean}/0.0.0.0`,
-        `address=/.${clean}/0.0.0.0`,
-        `address=/${clean}/::`,
-        `address=/.${clean}/::`
+        `address=/${root}/0.0.0.0`,
+        `address=/.${root}/0.0.0.0`,
+        `address=/${root}/::`,
+        `address=/.${root}/::`
       );
     }
   }
 
-  return lines.join("\n");
+  return [...new Set(lines)].join("\n");
 }
-
 async function disconnectClients() {
   const macs = parseStationMacs(
     lastStationOutput
@@ -615,6 +622,32 @@ async function blockDoH() {
       ]);
     });
   }
+}
+
+async function blockQUIC() {
+  await sudo([
+    "iptables",
+    "-C",
+    "FORWARD",
+    "-p",
+    "udp",
+    "--dport",
+    "443",
+    "-j",
+    "REJECT",
+  ]).catch(async () => {
+    await sudo([
+      "iptables",
+      "-A",
+      "FORWARD",
+      "-p",
+      "udp",
+      "--dport",
+      "443",
+      "-j",
+      "REJECT",
+    ]);
+  });
 }
 
 async function enforceMaxClients(
@@ -976,6 +1009,8 @@ server.listen(
       await enforceLocalDNS();
 
       await blockDoH();
+
+      await blockQUIC();
 
       console.log(
         "DNS enforcement enabled"
