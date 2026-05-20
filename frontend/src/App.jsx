@@ -165,6 +165,7 @@ function App() {
   const [busyAction, setBusyAction] = useState("");
   const [actionError, setActionError] = useState("");
   const [deviceHistory, setDeviceHistory] = useState({});
+  const [anomalies, setAnomalies] = useState({});
   const stations = useMemo(
     () => parseStations(rawOutput),
     [rawOutput]
@@ -313,7 +314,12 @@ const totalPackets = stations.reduce(
 
         if (message.output) {
   setRawOutput(message.output);
-
+if (message.type === "anomaly_detection") {
+  setAnomalies((prev) => ({
+    ...prev,
+    [message.device.mac]: message.anomaly,
+  }));
+}
   const parsedStations =
     parseStations(message.output);
 
@@ -624,6 +630,8 @@ backdrop-blur-2xl
                     const limit =
                       controls.limitedMacs[station.mac];
 
+                      const anomaly =
+  anomalies[station.mac];
                     const limitValue =
                       limitInputs[station.mac] ??
                       limit ??
@@ -663,6 +671,21 @@ backdrop-blur-2xl
                                 {limit} Kbps
                               </span>
                             )}
+                            {anomaly?.anomaly && (
+  <span className="
+    rounded-xl
+    bg-red-500/10
+    px-3
+    py-1
+    text-xs
+    text-red-300
+    border
+    border-red-500/20
+    animate-pulse
+  ">
+    PHY ANOMALY
+  </span>
+)}
                           </div>
                         </div>
 
@@ -684,6 +707,53 @@ backdrop-blur-2xl
                             </div>
                           ))}
                         </dl>
+                        {anomaly?.anomaly && (
+  <div className="
+    mt-4
+    rounded-2xl
+    border
+    border-red-500/20
+    bg-red-500/5
+    p-4
+  ">
+    <div className="flex items-center justify-between">
+      <p className="text-sm font-semibold text-red-300">
+        AI Threat Detection
+      </p>
+
+      <span className="
+        rounded-lg
+        bg-red-500/10
+        px-2
+        py-1
+        text-xs
+        text-red-200
+      ">
+        Score: {anomaly.score}
+      </span>
+    </div>
+
+    <div className="mt-3 flex flex-wrap gap-2">
+      {anomaly.reasons.map((reason) => (
+        <span
+          key={reason}
+          className="
+            rounded-lg
+            bg-black/40
+            px-2
+            py-1
+            text-xs
+            text-red-200
+            border
+            border-red-500/10
+          "
+        >
+          {reason}
+        </span>
+      ))}
+    </div>
+  </div>
+)}
                         <div className="mt-6 h-[180px] rounded-2xl border border-white/5 bg-black/40 p-3">
   <ResponsiveContainer
     width="100%"

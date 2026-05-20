@@ -24,6 +24,7 @@ const blockedSites = new Set();
 
 let maxClients = null;
 let lastStationOutput = "Waiting for station data...";
+const deviceHistory = new Map();
 
 const DOH_IPS = [
   "1.1.1.1",
@@ -274,7 +275,141 @@ function parseStationMacs(output) {
     )
     .filter(isValidMac);
 }
+function parseStationDump(output) {
+  if (!output || output === "No stations connected.") {
+    return [];
+  }
 
+  return output
+    .split(/^Station /m)
+    .slice(1)
+    .map((block) => {
+      const lines = block.split("\n").map(l => l.trim());
+
+      const mac = normalizeMac(
+        lines[0].split(" ")[0]
+      );
+
+      const getValue = (key) => {
+        const line = lines.find(l =>
+          l.startsWith(key)
+        );
+
+        if (!line) return null;
+
+        return line.split(":")[1]?.trim();
+      };
+
+      return {
+        mac,
+
+        inactive_time: parseInt(
+          getValue("inactive time") || "0"
+        ),
+
+        rx_bytes: parseInt(
+          getValue("rx bytes") || "0"
+        ),
+
+        tx_bytes: parseInt(
+          getValue("tx bytes") || "0"
+        ),
+
+        rx_packets: parseInt(
+          getValue("rx packets") || "0"
+        ),
+
+        tx_packets: parseInt(
+          getValue("tx packets") || "0"
+        ),
+
+        tx_failed: parseInt(
+          getValue("tx failed") || "0"
+        ),
+
+        tx_bitrate: parseFloat(
+          getValue("tx bitrate") || "0"
+        ),
+
+        rx_bitrate: parseFloat(
+          getValue("rx bitrate") || "0"
+        ),
+
+        connected_time: parseInt(
+          getValue("connected time") || "0"
+        ),
+      };
+    });
+}
+function detectAnomaly(device) {
+  const history =
+    deviceHistory.get(device.mac) || [];
+
+  if (history.length < 5) {
+    return {
+      anomaly: false,
+      score: 0,
+      reasons: []
+    };
+  }
+
+  const avgTx =
+    history.reduce(
+      (a, b) => a + b.tx_bitrate,
+      0
+    ) / history.length;
+
+  const avgRx =
+    history.reduce(
+      (a, b) => a + b.rx_bitrate,
+      0
+    ) / history.length;
+
+  let score = 0;
+  const reasons = [];
+
+  // TX bitrate collapse
+  if (
+    device.tx_bitrate < avgTx * 0.3
+  ) {
+    score += 40;
+    reasons.push(
+      "TX bitrate dropped sharply"
+    );
+  }
+
+  // RX bitrate collapse
+  if (
+    device.rx_bitrate < avgRx * 0.3
+  ) {
+    score += 40;
+    reasons.push(
+      "RX bitrate dropped sharply"
+    );
+  }
+
+  // Packet failures
+  if (device.tx_failed > 10) {
+    score += 30;
+    reasons.push(
+      "High transmission failures"
+    );
+  }
+
+  // Inactivity spike
+  if (device.inactive_time > 5000) {
+    score += 20;
+    reasons.push(
+      "High inactivity detected"
+    );
+  }
+
+  return {
+    anomaly: score >= 50,
+    score,
+    reasons
+  };
+}
 function runCommand(command, args, input) {
   return new Promise((resolve, reject) => {
     const child = execFile(
@@ -991,6 +1126,7 @@ async function handleApi(req, res) {
 }
 
 function runStationDump() {
+
   if (commandInFlight) {
     return;
   }
@@ -1030,7 +1166,36 @@ function runStationDump() {
         "No stations connected.";
 
       lastStationOutput = output;
+      const devices =
+  parseStationDump(output);
 
+for (const device of devices) {
+
+  const history =
+    deviceHistory.get(device.mac) || [];
+
+  history.push(device);
+
+  // keep last 20 samples
+  if (history.length > 20) {
+    history.shift();
+  }
+
+  deviceHistory.set(
+    device.mac,
+    history
+  );
+
+  const anomaly =
+    detectAnomaly(device);
+
+  broadcast({
+    type: "anomaly_detection",
+    timestamp,
+    device,
+    anomaly
+  });
+}
       enforceMaxClients(
         parseStationMacs(output)
       )
