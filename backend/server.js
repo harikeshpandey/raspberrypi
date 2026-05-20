@@ -2,6 +2,8 @@ const http = require("http");
 const { execFile } = require("child_process");
 const crypto = require("crypto");
 const WebSocket = require("ws");
+const fs = require("fs");
+const path = require("path");
 
 const PORT = Number(process.env.PORT || 3001);
 const INTERFACE = process.env.WIFI_INTERFACE || "wlan0";
@@ -24,6 +26,7 @@ const blockedSites = new Set();
 
 let maxClients = null;
 let lastStationOutput = "Waiting for station data...";
+
 const deviceHistory = new Map();
 
 const DOH_IPS = [
@@ -340,6 +343,43 @@ function parseStationDump(output) {
         ),
       };
     });
+}
+function logDeviceData(device) {
+  const dir = "./logs";
+
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir);
+  }
+
+  const file = path.join(
+    dir,
+    `${device.mac}.csv`
+  );
+
+  const row = [
+    new Date().toISOString(),
+
+    device.tx_bitrate,
+
+    device.rx_bitrate,
+
+    device.tx_failed,
+
+    device.inactive_time,
+
+    device.tx_packets,
+
+    device.rx_packets,
+  ].join(",") + "\n";
+
+  if (!fs.existsSync(file)) {
+    fs.writeFileSync(
+      file,
+      "timestamp,tx_bitrate,rx_bitrate,tx_failed,inactive_time,tx_packets,rx_packets\n"
+    );
+  }
+
+  fs.appendFileSync(file, row);
 }
 function detectAnomaly(device) {
   const history =
@@ -1166,6 +1206,7 @@ function runStationDump() {
         "No stations connected.";
 
       lastStationOutput = output;
+
       const devices =
   parseStationDump(output);
 
@@ -1176,7 +1217,6 @@ for (const device of devices) {
 
   history.push(device);
 
-  // keep last 20 samples
   if (history.length > 20) {
     history.shift();
   }
@@ -1185,7 +1225,7 @@ for (const device of devices) {
     device.mac,
     history
   );
-
+  logDeviceData(device);
   const anomaly =
     detectAnomaly(device);
 
@@ -1195,6 +1235,14 @@ for (const device of devices) {
     device,
     anomaly
   });
+   if (
+    anomaly.anomaly &&
+    anomaly.score >= 80
+  ) {
+
+    console.log(
+      `[AI] Severe anomaly detected for ${device.mac}`
+    );}
 }
       enforceMaxClients(
         parseStationMacs(output)
